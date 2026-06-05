@@ -7,6 +7,9 @@ locals {
     "run.googleapis.com",
     "compute.googleapis.com",
     "cloudbuild.googleapis.com",
+    # OpenTelemetry Collector sinks (see otel.tf).
+    "cloudtrace.googleapis.com",
+    "monitoring.googleapis.com",
   ]
 }
 
@@ -87,6 +90,22 @@ resource "google_compute_url_map" "default" {
       paths   = ["/fe-cart", "/fe-cart/*"]
       service = google_compute_backend_service.bes["fe-cart"].id
     }
+
+    # Browser RUM ingest. Same-origin with the app, so no CORS preflight. The
+    # OTLP exporter posts to /otel/v1/traces; strip the /otel prefix so the
+    # collector's receiver sees the path it expects (/v1/traces).
+    # GCP includes the matched prefix's trailing slash, so "/otel/v1/traces"
+    # with path_prefix_rewrite "/" rewrites to "/v1/traces" (no double slash).
+    path_rule {
+      paths   = ["/otel/*"]
+      service = google_compute_backend_service.otel_bes.id
+
+      route_action {
+        url_rewrite {
+          path_prefix_rewrite = "/"
+        }
+      }
+    }
   }
 }
 
@@ -143,25 +162,7 @@ resource "google_compute_global_forwarding_rule" "http" {
   target                = google_compute_target_http_proxy.redirect.id
 }
 
-# ---------------------------------------------------------------------------
-# Cloud Build GitHub trigger — push to main on GDGoC-BiOn/fe-shell
-# Prerequisite: connect the repo once via Cloud Console →
-#   Cloud Build > Repositories > Connect Repository (GitHub App).
-# ---------------------------------------------------------------------------
-resource "google_cloudbuild_trigger" "fe_shell" {
-  project     = var.project_id
-  name        = "fe-shell-deploy"
-  description = "Build and deploy fe-shell on push to main"
-
-  github {
-    owner = "GDGoC-BiOn"
-    name  = "fe-shell"
-    push {
-      branch = "^main$"
-    }
-  }
-
-  filename = "cloudbuild.yaml"
-
-  depends_on = [google_project_service.apis]
-}
+# NOTE: CI/CD for the micro-frontends is owned by Cloud Run "deploy from
+# repository" (the managed rmgpgab-* triggers), NOT Terraform — so there is
+# deliberately no google_cloudbuild_trigger resource here. Adding one would
+# create a second trigger firing on the same push.
