@@ -145,6 +145,95 @@ gcloud compute ssl-certificates describe <nama-cert> --global --format='value(ma
 
 Begitu statusnya `ACTIVE`, domain udah bisa diakses lewat HTTPS.
 
+## Build dan deploy service
+
+Service Cloud Run dibangun dari `cloudbuild.yaml` di tiap folder, bukan dari Terraform. Perintah di bawah dijalanin dari root repo (satu level di atas folder terraform ini).
+
+Bikin Artifact Registry repo `mfe` dulu kalau belum ada, karena semua image di-push ke situ.
+
+```bash
+gcloud artifacts repositories create mfe \
+  --repository-format=docker \
+  --location=asia-southeast2 \
+  --description="Microfrontend images"
+```
+
+Build, push, sama deploy tiap service dalam satu perintah.
+
+```bash
+gcloud builds submit fe-shell --config=fe-shell/cloudbuild.yaml
+
+gcloud builds submit fe-catalog --config=fe-catalog/cloudbuild.yaml
+
+gcloud builds submit fe-cart --config=fe-cart/cloudbuild.yaml
+
+gcloud builds submit otel-collector --config=otel-collector/cloudbuild.yaml
+```
+
+Tiap service punya repo sendiri di GitHub jadi `cloudbuild.yaml` ada di root tiap repo.
+
+```
+https://github.com/GDGoC-BiOn/fe-shell
+https://github.com/GDGoC-BiOn/fe-catalog
+https://github.com/GDGoC-BiOn/fe-cart
+```
+
+Kalau mau tiap push langsung kebuild sendiri, bikin trigger per repo.
+
+```bash
+gcloud builds triggers create github \
+  --name=fe-shell-deploy \
+  --repo-name=fe-shell \
+  --repo-owner=GDGoC-BiOn \
+  --branch-pattern=^main$ \
+  --build-config=cloudbuild.yaml
+
+gcloud builds triggers create github \
+  --name=fe-catalog-deploy \
+  --repo-name=fe-catalog \
+  --repo-owner=GDGoC-BiOn \
+  --branch-pattern=^main$ \
+  --build-config=cloudbuild.yaml
+
+gcloud builds triggers create github \
+  --name=fe-cart-deploy \
+  --repo-name=fe-cart \
+  --repo-owner=GDGoC-BiOn \
+  --branch-pattern=^main$ \
+  --build-config=cloudbuild.yaml
+```
+
+## Microservices vs microfrontend
+
+Biar gak ketuker, dua istilah ini main di lapisan yang beda.
+
+Microservices mecah backend jadi banyak service kecil yang ngurus datanya sendiri. Komunikasinya server ke server, gak kelihatan sama pengguna. Biasanya lewat HTTP REST atau gRPC buat panggilan langsung yang butuh balasan, atau lewat message broker kayak Pub/Sub buat event yang gak nunggu balasan. Tiap service nyimpen state dan databasenya sendiri.
+
+Microfrontend mecah tampilan jadi beberapa aplikasi frontend yang berdiri sendiri, di sini fe-shell, fe-catalog, sama fe-cart. Komunikasinya jalan di browser pengguna, bukan di server. fe-shell jadi host yang manggil dan nempelin fe-catalog sama fe-cart ke halaman. Antar frontend ngobrolnya lewat hal yang ada di browser kayak custom event, props pas modul dipasang, shared state, atau URL.
+
+Di stack ini tiga frontend dilayani dari satu domain lewat load balancer dengan routing per path, jadi semua origin sama dan gak perlu CORS. Bedanya, kalau microservices nuker data antar server, microfrontend nyusun potongan tampilan jadi satu halaman utuh di sisi pengguna.
+
+```mermaid
+flowchart LR
+    subgraph mf [Microfrontend di browser]
+        shell[fe-shell host]
+        cat[fe-catalog]
+        cart[fe-cart]
+        shell -. custom event / shared state .- cat
+        shell -. custom event / shared state .- cart
+    end
+
+    subgraph ms [Microservices di server]
+        a[service a]
+        b[service b]
+        c[service c]
+        a -. REST / gRPC .- b
+        b -. Pub/Sub event .- c
+    end
+
+    mf -->|HTTP API| ms
+```
+
 ## Catatan
 
 CI/CD micro frontend diurus sama Cloud Run deploy from repository, bukan Terraform. Makanya di sini sengaja gak ada resource cloudbuild trigger biar gak ada dua trigger yang jalan barengan di push yang sama.
