@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.github
+*.log
+.env
+.env.*
+!.env.example
+.terraform
+*.tfstate
+*.tfstate.*
+terraform.tfvars
